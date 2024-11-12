@@ -9,7 +9,7 @@ library(dplyr)
 library(leaflet)
 
 # Load real estate dataset
-project1_data <- read.csv("/Users/isabella/Desktop/Chapman/Xtra Semester/MGSC 410/midtermdata.csv")
+project1_data <- read.csv("midtermdata.csv")
 
 # Define the UI
 ui <- fluidPage(  
