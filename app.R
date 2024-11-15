@@ -1,12 +1,12 @@
-# Load necessary libraries
 library(shiny)
-library(bslib)  # Ensure bslib is loaded
+library(bslib)
 library(ggplot2)
 library(plotly)
 library(shinycssloaders)
-library(memoise)
 library(dplyr)
 library(leaflet)
+library(randomForest)  # For Random Forest model
+library(caret)  # For data splitting and preprocessing
 
 # Load real estate dataset
 project1_data <- read.csv("midtermdata.csv")
@@ -95,7 +95,6 @@ ui <- fluidPage(
         ),
         tabPanel("Details",
                  h4("Detailed Home Information"),
-                 # Metric box for average price
                  fluidRow(
                    column(4,
                           div(class = "metric-box",
@@ -104,9 +103,19 @@ ui <- fluidPage(
                           )
                    )
                  ),
-                 # Interactive map for location of homes
                  h4("Interactive Map of Homes"),
                  leafletOutput("map")
+        ),
+        tabPanel("Price Prediction",
+                 h4("Predict Home Price with Random Forest Model"),
+                 fluidRow(
+                   column(4, numericInput("yearBuilt_input", "Year Built", value = 2000, min = 1800, max = 2024)),
+                   column(4, numericInput("bathrooms_input", "Number of Bathrooms", value = 2)),
+                   column(4, numericInput("bedrooms_input", "Number of Bedrooms", value = 3))
+                 ),
+                 actionButton("predict_price", "Predict Price"),
+                 h4("Predicted Price:"),
+                 textOutput("predicted_price")
         )
       )
     )
@@ -116,30 +125,18 @@ ui <- fluidPage(
 # Define the server
 server <- function(input, output, session) {
   
-  # Reactive expression to filter data based on selected bedrooms, lot size, and zip code
+  # Reactive expression to filter data based on selected bedrooms and lot size
   filtered_home_data <- reactive({
     data <- project1_data %>%
       filter(bedrooms %in% as.numeric(input$bedrooms_select) &
                lotSize >= input$lotSize_range[1] & lotSize <= input$lotSize_range[2])
-    
-    # Filter based on the selected zip code if it's chosen
-    if (!is.null(input$zipcode_select) && input$zipcode_select != "") {
-      data <- data %>% filter(zipcode == input$zipcode_select)
-    }
-    
     data
-  })
-  
-  # Populate the zipcode dropdown dynamically based on filtered data
-  observe({
-    zipcodes <- unique(filtered_home_data()$zipcode)
-    updateSelectInput(session, "zipcode_select", choices = zipcodes)
   })
   
   # Render price output
   output$price <- renderUI({
     data <- filtered_home_data()
-    avg_price <- data %>% summarise(avg_price = mean(price, na.rm = TRUE)) %>% pull(avg_price)
+    avg_price <- mean(data$price, na.rm = TRUE)
     HTML(paste("<span style='font-size: 24px; color: #e75480; font-weight: bold;'>$",
                formatC(avg_price, format = "f", big.mark = ",", digits = 0), "</span>"))
   })
@@ -152,7 +149,7 @@ server <- function(input, output, session) {
   
   # Render state output
   output$state <- renderUI({
-    states <- filtered_home_data() %>% summarise(states = paste(unique(state), collapse = ", ")) %>% pull(states)
+    states <- paste(unique(filtered_home_data()$state), collapse = ", ")
     HTML(paste("<span style='font-size: 24px; color: #e75480; font-weight: bold;'>", states, "</span>"))
   })
   
@@ -165,18 +162,10 @@ server <- function(input, output, session) {
       theme_minimal()
   })
   
-  # Render the average price for the "Details" tab
+  # Render average price for the "Details" tab
   output$average_price_details <- renderUI({
     data <- filtered_home_data()
-    
-    if (nrow(data) == 0) {
-      return(HTML("<span style='font-size: 24px; color: #e75480; font-weight: bold;'>No data available</span>"))
-    }
-    
-    avg_price <- data %>%
-      summarise(avg_price = mean(price, na.rm = TRUE)) %>%
-      pull(avg_price)
-    
+    avg_price <- mean(data$price, na.rm = TRUE)
     HTML(paste("<span style='font-size: 24px; color: #e75480; font-weight: bold;'>$",
                formatC(avg_price, format = "f", big.mark = ",", digits = 0), "</span>"))
   })
@@ -184,21 +173,38 @@ server <- function(input, output, session) {
   # Render the interactive map
   output$map <- renderLeaflet({
     data <- filtered_home_data()
-    
-    # Ensure we have latitude and longitude columns in your dataset
-    if ("latitude" %in% colnames(data) && "longitude" %in% colnames(data)) {
-      leaflet(data) %>%
-        addTiles() %>%
-        addCircleMarkers(lng = ~longitude, lat = ~latitude, 
-                         radius = 6, color = '#ff66b2', fillOpacity = 0.7,
-                         popup = ~paste("Price: $", price, "<br>Zipcode: ", zipcode))
-    } else {
-      leaflet() %>%
-        addTiles() %>%
-        addMarkers(lng = -118.25, lat = 34.05, popup = "No location data available.")
-    }
+    leaflet(data) %>%
+      addTiles() %>%
+      addCircleMarkers(lng = ~longitude, lat = ~latitude, 
+                       radius = 6, color = '#ff66b2', fillOpacity = 0.7,
+                       popup = ~paste("Price: $", price, "<br>Zipcode: ", zipcode))
+  })
+  
+  # Train Random Forest model on initial data
+  rf_model <- reactive({
+    set.seed(123)
+    train_data <- project1_data %>%
+      select(price, yearBuilt, bathrooms, bedrooms) %>%
+      na.omit()
+    train_control <- trainControl(method = "cv", number = 5)
+    randomForest(price ~ yearBuilt + bathrooms + bedrooms, data = train_data)
+  })
+  
+  # Predict price based on input values
+  observeEvent(input$predict_price, {
+    model <- rf_model()
+    new_data <- data.frame(
+      yearBuilt = input$yearBuilt_input,
+      bathrooms = input$bathrooms_input,
+      bedrooms = input$bedrooms_input
+    )
+    predicted_price <- predict(model, new_data)
+    output$predicted_price <- renderText({
+      paste0("$", formatC(predicted_price, format = "f", big.mark = ",", digits = 0))
+    })
   })
 }
 
 # Run the application 
 shinyApp(ui = ui, server = server)
+
